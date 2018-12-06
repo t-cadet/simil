@@ -6,23 +6,46 @@ from keras.models import Model
 from keras.layers import Input, Dense, Dropout
 from keras import layers
 
-def getMnliBow(dataset, vocab):
+def mnliToList(dataset, vocab):
+    premises = []
+    hypothesis = []
+    labels = []
 
-    def toBow(sentence, vocab):
-        bow = np.zeros(vocab.get_vocab_size())
-        bow[[vocab.get_token_index(token.text) for token in sentence]] = 1
-        return bow
-
-    premises = np.zeros((len(dataset), vocab.get_vocab_size()))
-    hypothesis = np.zeros((len(dataset), vocab.get_vocab_size()))
-    labels = np.zeros((len(dataset), vocab.get_vocab_size(namespace='labels')))
-
-    i = 0
     for instance in dataset:
-        premises[i] = toBow(instance.fields['premise'].tokens, vocab)
-        hypothesis[i] = toBow(instance.fields['hypothesis'].tokens, vocab)
-        labels[i, vocab.get_token_index(instance.fields['label'].label, namespace="labels")] = 1 
+        premises.append([vocab.get_token_index(token.text) for token in instance.fields['premise'].tokens])
+        hypothesis.append([vocab.get_token_index(token.text) for token in instance.fields['hypothesis'].tokens])
+        labels.append(vocab.get_token_index(instance.fields['label'].label, namespace="labels"))
+    return (premises, hypothesis, labels)
+
+
+def getBow(dataset, vocab, bow_type='groundBow'):
+    def countBow(sentence, vocab):
+        bow = np.zeros(vocab.get_vocab_size())
+        for token_id in sentence:
+            bow[token_id]+=1
+        return bow
+    def groundBow(sentence, vocab):        
+        return [0 if c==0 else 1 for c in countBow(sentence, vocab)]
+    def freqBow(sentence, vocab):
+        return [c/len(sentence) for c in countBow(sentence, vocab)]            
+
+    bows = np.zeros((len(dataset), vocab.get_vocab_size()))
+    i = 0
+    for sentence in dataset:
+        bows[i] = locals()[bow_type](sentence, vocab)
         i = i+1
+    return bows
+
+def getMnliBow(dataset, vocab, bow_type='groundBow'):
+    premises, hypothesis, labs = mnliToList(dataset, vocab)
+
+    premises = getBow(premises, vocab, bow_type)
+    hypothesis = getBow(hypothesis, vocab, bow_type)
+
+    labels = np.zeros((len(dataset), vocab.get_vocab_size(namespace='labels')))
+    for i in range(len(dataset)):
+        labels[i, labs[i]] = 1
+
     return (premises, hypothesis, labels)
 
 reader = SnliReader()
@@ -37,8 +60,8 @@ validation_dataset = reader.read('tests/fixtures/val1000.jsonl') # Fixture
 vocab = Vocabulary.from_instances(train_dataset + validation_dataset)
 # vocab.print_statistics()
 
-t_premises, t_hypothesis, t_labels = getMnliBow(train_dataset, vocab)
-v_premises, v_hypothesis, v_labels = getMnliBow(validation_dataset, vocab)
+t_premises, t_hypothesis, t_labels = getMnliBow(train_dataset, vocab, 'freqBow')
+v_premises, v_hypothesis, v_labels = getMnliBow(validation_dataset, vocab, 'freqBow')
 
 # for i in range(3):
 #     print(i)
@@ -47,14 +70,14 @@ v_premises, v_hypothesis, v_labels = getMnliBow(validation_dataset, vocab)
 #     print(t_labels[i])
 
 prem_input = Input(shape=(vocab.get_vocab_size('tokens'),))
-# prem_out = Dense(32, activation='relu')(prem_input)
-# prem_out = Dense(16, activation='relu')(prem_out)
-prem_out = Dense(8, activation='hard_sigmoid')(prem_input)
+prem_out = Dense(32, activation='relu')(prem_input)
+prem_out = Dense(16, activation='relu')(prem_out)
+# prem_out = Dense(8, activation='hard_sigmoid')(prem_input)
 
 hyp_input = Input(shape=(vocab.get_vocab_size('tokens'),))
-# hyp_out = Dense(32, activation='relu')(hyp_input)
-# hyp_out = Dense(16, activation='relu')(hyp_out)
-hyp_out = Dense(8, activation='hard_sigmoid')(hyp_input)
+hyp_out = Dense(32, activation='relu')(hyp_input)
+hyp_out = Dense(16, activation='relu')(hyp_out)
+# hyp_out = Dense(8, activation='hard_sigmoid')(hyp_input)
 
 concatenated = layers.concatenate([prem_out, hyp_out], axis=-1)
 output = Dense(vocab.get_vocab_size('labels'), activation='softmax')(concatenated)
@@ -68,7 +91,7 @@ model.fit(
     [t_premises, t_hypothesis],
     t_labels,
     batch_size=32,
-    epochs=100,
+    epochs=10,
     verbose=1,
     validation_data=([v_premises, v_hypothesis], v_labels)
 )
