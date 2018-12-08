@@ -1,3 +1,9 @@
+# TODO: construire 3 modèles corrects 
+# refactoriser pour appeler le model que je veux
+# analyser les erreurs
+# utiliser le dataset MR, refactoriser, analyser erreurs
+# implémenter les embeddings 
+
 import numpy as np
 from allennlp.data.dataset_readers import SnliReader
 from allennlp.data.vocabulary import Vocabulary
