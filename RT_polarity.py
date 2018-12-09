@@ -5,8 +5,17 @@ from sklearn.model_selection import train_test_split
 
 # ngram_vectorize
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.feature_selection import SelectKBest
-from sklearn.feature_selection import f_classif
+from sklearn.feature_selection import SelectKBest, f_classif
+
+# mlp_model
+from tensorflow.python.keras import models
+from tensorflow.python.keras.layers import Dense, Dropout
+
+# checkLabels
+import explore_data
+
+# train_ngram_model
+import tensorflow as tf
 
 def load_rt_polarity_dataset(data_path = "datasets", seed=123, test_split=0.15):
     """Loads the rt-polarity dataset.
@@ -50,18 +59,22 @@ def ngram_vectorize(train_texts, train_labels, test_texts, ngram_range=(1,2), to
         train_texts: list, training text strings.
         train_labels: np.ndarray, training labels.
         test_texts: list, test text strings.
+        ngram_range: tuple, range (inclusive) of n-gram sizes for tokenizing text.
+        top_k: int, limit on the number of features.
+        token_mode: string, whether text should be split into word or character n-grams. One of 'word', 'char'.
+        min_doc_freq: int, minimum document/corpus frequency below which a token will be discarded.
 
     # Returns
         x_train, x_test: vectorized training and test texts
     """
     # Create keyword arguments to pass to the 'tf-idf' vectorizer.
     kwargs = {
-            'ngram_range': ngram_range,  # Use 1-grams + 2-grams. Range (inclusive) of n-gram sizes for tokenizing text.
+            'ngram_range': ngram_range,
             'dtype': 'int32',
             'strip_accents': 'unicode',
             'decode_error': 'replace',
-            'analyzer': token_mode,  # Whether text should be split into word or character n-grams. One of 'word', 'char'.
-            'min_df': min_doc_freq, # Minimum document/corpus frequency below which a token will be discarded.
+            'analyzer': token_mode,
+            'min_df': min_doc_freq,
     }
     vectorizer = TfidfVectorizer(**kwargs)
 
@@ -78,5 +91,71 @@ def ngram_vectorize(train_texts, train_labels, test_texts, ngram_range=(1,2), to
     x_test = selector.transform(x_test).astype('float32')
     return x_train, x_test
 
-x_train, x_test, y_train, y_test = load_rt_polarity_dataset()
-x_train, x_test = ngram_vectorize(x_train, y_train, x_test)
+def mlp_model(units, input_shape, num_classes = 2, dropout_rate = 0.2, activation='relu', optimizer='rmsprop'):
+    """Creates an instance of a multi-layer perceptron model.
+
+    # Arguments
+        units: int array, output dimension for each of the layers.
+        input_shape: tuple, shape of input to the model.
+        num_classes: int, number of output classes.
+        dropout_rate: float, percentage of input to drop at Dropout layers.
+        activation: string, the activation function.
+
+    # Returns
+        An MLP model instance.
+    """
+    model = models.Sequential()
+    model.add(Dropout(rate=dropout_rate, input_shape=input_shape))
+
+    for dim in units:
+        model.add(Dense(units=dim, activation=activation))
+        model.add(Dropout(rate=dropout_rate))
+
+    op_units, op_activation, loss = (1, 'sigmoid', 'binary_crossentropy') if num_classes==2 else (num_classes, 'softmax', 'sparse_categorical_crossentropy')
+
+    model.add(Dense(units=op_units, activation=op_activation))
+    model.compile(optimizer=optimizer, loss=loss, metrics=['acc'])
+    return model
+
+def checkLabels(train_labels, test_labels):
+    # Verify that validation labels are in the same range as training labels.
+    num_classes = explore_data.get_num_classes(train_labels)
+    unexpected_labels = [v for v in test_labels if v not in range(num_classes)]
+    if len(unexpected_labels):
+        raise ValueError('Unexpected label values found in the validation set:'
+                         ' {unexpected_labels}. Please make sure that the '
+                         'labels in the validation set are in the same range '
+                         'as training labels.'.format(unexpected_labels=unexpected_labels))
+    return num_classes
+
+def train_model(model, x_train, train_labels, epochs=1000, val_split=0.15, batch_size=32, filename='rt_mlp_model'):
+
+    callbacks = [tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=2)]
+
+    # Train and validate model.
+    history = model.fit(
+            x_train,
+            train_labels,
+            epochs=epochs,
+            callbacks=callbacks,
+            validation_split=val_split,
+            verbose=2,  # Logs once per epoch.
+            batch_size=batch_size)
+
+    # Print results.
+    history = history.history
+    print('Validation accuracy: {acc}, loss: {loss}'.format(acc=history['val_acc'][-1], loss=history['val_loss'][-1]))
+
+    # Save model.
+    model.save('serial/'+filename+'.h5')
+    return history['val_acc'][-1], history['val_loss'][-1]
+
+train_texts, test_texts, train_labels, test_labels = load_rt_polarity_dataset()
+num_classes = checkLabels(train_labels, test_labels)
+x_train, x_test = ngram_vectorize(train_texts, train_labels, test_texts)
+
+model = mlp_model(units=[8], input_shape=x_train.shape[1:], num_classes=num_classes, optimizer=tf.keras.optimizers.Adam(lr=1e-3))
+train_model(model, x_train, train_labels)
+
+
+
