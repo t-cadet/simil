@@ -89,7 +89,7 @@ def ngram_vectorize(train_texts, train_labels, test_texts, ngram_range=(1,2), to
     selector.fit(x_train, train_labels)
     x_train = selector.transform(x_train).astype('float32')
     x_test = selector.transform(x_test).astype('float32')
-    return x_train, x_test
+    return x_train, x_test, vectorizer, selector
 
 def mlp_model(units, input_shape, num_classes = 2, dropout_rate = 0.2, activation='relu', optimizer='rmsprop'):
     """Creates an instance of a multi-layer perceptron model.
@@ -152,10 +152,16 @@ def train_model(model, x_train, train_labels, epochs=1000, val_split=0.15, batch
 
 train_texts, test_texts, train_labels, test_labels = load_rt_polarity_dataset()
 num_classes = checkLabels(train_labels, test_labels)
-x_train, x_test = ngram_vectorize(train_texts, train_labels, test_texts)
+x_train, x_test, v, s = ngram_vectorize(train_texts, train_labels, test_texts)
 
 model = mlp_model(units=[8], input_shape=x_train.shape[1:], num_classes=num_classes, optimizer=tf.keras.optimizers.Adam(lr=1e-3))
 train_model(model, x_train, train_labels)
+
+# model.predict(s.transform(v.transform(["Kirito still looks 12 years old even though he's 22 or something. Tea parties still happen quite often"])).astype('float32'))
+# array([[0.93839157]], dtype=float32)
+
+# Pacing is as bad as always, too slow as seen on the first 6 episodes, or too fast like in episodes 7 and 9;Kirito still looks 12 years old even though he's 22 or something;Tea parties still happen quite often;What the heck is Kirito doing on these 2 years at the academy, he sure isn't training
+# Pacing is as bad as always, too slow as seen on the first 6 episodes, or too fast like in episodes 7 and 9;What the heck is Kirito doing on these 2 years at the academy, he sure isn't training
 
 
 
