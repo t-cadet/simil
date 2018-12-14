@@ -17,7 +17,9 @@ import explore_data
 # train_ngram_model
 import tensorflow as tf
 
-def load_rt_polarity_dataset(data_path = "datasets", seed=123, test_split=0.15):
+from collections import defaultdict
+
+def load_rt_polarity_dataset(data_path = "datasets", seed=123, test_split=0.2):
     """Loads the rt-polarity dataset.
 
     # Arguments
@@ -91,7 +93,7 @@ def ngram_vectorize(train_texts, train_labels, test_texts, ngram_range=(1,2), to
     x_test = selector.transform(x_test).astype('float32')
     return x_train, x_test, vectorizer, selector
 
-def mlp_model(units, input_shape, num_classes = 2, dropout_rate = 0.2, activation='relu', optimizer='rmsprop'):
+def mlp_model(units, input_shape, num_classes = 2, dropout_rate = 0.2, activation='relu', optimizer='rmsprop', regularizer=None):
     """Creates an instance of a multi-layer perceptron model.
 
     # Arguments
@@ -108,7 +110,7 @@ def mlp_model(units, input_shape, num_classes = 2, dropout_rate = 0.2, activatio
     model.add(Dropout(rate=dropout_rate, input_shape=input_shape))
 
     for dim in units:
-        model.add(Dense(units=dim, activation=activation))
+        model.add(Dense(units=dim, activation=activation, kernel_regularizer=regularizer))
         model.add(Dropout(rate=dropout_rate))
 
     op_units, op_activation, loss = (1, 'sigmoid', 'binary_crossentropy') if num_classes==2 else (num_classes, 'softmax', 'sparse_categorical_crossentropy')
@@ -128,9 +130,9 @@ def checkLabels(train_labels, test_labels):
                          'as training labels.'.format(unexpected_labels=unexpected_labels))
     return num_classes
 
-def train_model(model, x_train, train_labels, epochs=1000, val_split=0.15, batch_size=32, filename='rt_mlp_model'):
+def train_model(model, x_train, train_labels, epochs=1000, val_split=0.2, batch_size=32, filename='rt_mlp_model'):
 
-    callbacks = [tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=2)]
+    callbacks = [tf.keras.callbacks.EarlyStopping(monitor='val_acc', patience=1)]
 
     # Train and validate model.
     history = model.fit(
@@ -150,12 +152,81 @@ def train_model(model, x_train, train_labels, epochs=1000, val_split=0.15, batch
     model.save('serial/'+filename+'.h5')
     return history['val_acc'][-1], history['val_loss'][-1]
 
+def separateMissRaw(model, data, labels, v, s, save=False):
+    """Returns a list of string containing misclassified samples and another containing well classified samples"""
+    wrong, right = [], []
+    predictions = model.predict(s.transform(v.transform(data)).astype('float32'))
+    for i in range(len(data)):
+        if round(predictions[i][0])==labels[i]:
+            right.append(data[i])
+        else:
+            wrong.append(data[i])
+    if save:
+        path = "stats/rt/"
+        with open(path+"right_samples_raw","w") as f:
+            f.write("".join(right))
+        with open(path+"wrong_samples_raw","w") as f:
+            f.write("".join(wrong))
+
+    return wrong, right
+
+def separateMiss(model, data, labels):
+    """Returns a list containing misclassified samples and another containing well classified samples"""
+    neg, pos = [], []
+    for sample, truth in list(zip(data, labels)):
+        if(round(model.predict(sample)[0][0])==truth):
+            pos.append(sample)
+        else:
+            neg.append(sample)
+    return neg, pos
+
+def getErrAnalysisStats(model, data, labels, vectorizer, save=False):
+    vocab = vectorizer.get_feature_names()
+    neg, pos = separateMiss(model, data, labels)
+    neg_count, pos_count, stats = defaultdict(int), defaultdict(int), defaultdict(int)
+
+    for sample in neg:
+        for token_id in sample.indices:
+            neg_count[vocab[token_id]]+=1
+    for sample in pos:
+        for token_id in sample.indices:
+            pos_count[vocab[token_id]]+=1
+
+    for key, neg_c in neg_count.items():
+        stats[key] = [neg_c, pos_count[key], round(neg_c/(neg_c+pos_count[key]),3), neg_c+pos_count[key]]
+    for key, pos_c in pos_count.items():
+        if key not in neg_count:
+            stats[key] = [0, pos_c, 0, pos_c]
+    if save: 
+        neg_str = [[vocab[token_id] for token_id in sample.indices] for sample in neg]
+        pos_str = [[vocab[token_id] for token_id in sample.indices] for sample in pos]
+        saveStats(stats, neg_str, pos_str)
+    return stats, neg, pos
+
+def saveStats(stats, neg=None, pos=None, sep=";"):
+    path = "stats/rt/"
+    with open(path+"wordErrorCount.csv","w") as f:
+        f.write("word;wrong_count;right_count;wrong/tot;total\n")
+        for key, value in stats.items():
+            f.write(key+sep+sep.join([str(v) for v in value])+"\n")
+    if neg is not None:
+        with open(path+"wrong_samples","w") as f:
+            f.write("\n".join([",".join(s) for s in neg]))
+    if pos is not None:
+        with open(path+"right_samples","w") as f:
+            f.write("\n".join([",".join(s) for s in pos]))
+
+
+# import operator
+# x = {1: 2, 3: 4, 4: 3, 2: 1, 0: 0}
+# sorted_x = sorted(x.items(), key=operator.itemgetter(1))       
+
 train_texts, test_texts, train_labels, test_labels = load_rt_polarity_dataset()
 num_classes = checkLabels(train_labels, test_labels)
-x_train, x_test, v, s = ngram_vectorize(train_texts, train_labels, test_texts)
+x_train, x_test, v, s = ngram_vectorize(train_texts, train_labels, test_texts, top_k=20000, ngram_range=(1,3))
 
-model = mlp_model(units=[8], input_shape=x_train.shape[1:], num_classes=num_classes, optimizer=tf.keras.optimizers.Adam(lr=1e-3))
-train_model(model, x_train, train_labels)
+model = mlp_model(units=[8], input_shape=x_train.shape[1:], num_classes=num_classes, dropout_rate=0.2, optimizer=tf.keras.optimizers.Adam(lr=1e-3))
+#train_model(model, x_train, train_labels)
 
 # model.predict(s.transform(v.transform(["Kirito still looks 12 years old even though he's 22 or something. Tea parties still happen quite often"])).astype('float32'))
 # array([[0.93839157]], dtype=float32)

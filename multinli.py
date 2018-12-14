@@ -17,6 +17,8 @@ import logging
 import json
 import random
 
+import numpy as np
+
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     datefmt='%m/%d/%Y %I:%M:%S %p',
@@ -116,16 +118,34 @@ def train_model(model, x_train, train_labels, epochs=1000, val_split=0.2, batch_
     model.save('serial/'+filename+'.h5')
     return history['val_acc'][-1], history['val_loss'][-1]
 
-def run_test(model, vectorizer, selector):
-    test_pre, test_hyp, test_lab = load_mnli(filename="multinli_1.0_dev_matched.jsonl")
-    test_pre = selector.transform(vectorizer.transform(test_pre))
-    test_hyp = selector.transform(vectorizer.transform(test_hyp))
+def run_test(model, vectorizer, selector, save_stats=False):
+    test_pre_raw, test_hyp_raw, test_lab = load_mnli(filename="multinli_1.0_dev_matched.jsonl")
+    test_pre = selector.transform(vectorizer.transform(test_pre_raw))
+    test_hyp = selector.transform(vectorizer.transform(test_hyp_raw))
     logging.info(model.evaluate([test_pre,test_hyp], test_lab))
+
+    if save_stats:
+        predictions = model.predict([test_pre,test_hyp])
+        wrong, right = [], []
+        for i in range(len(test_pre_raw)):
+            pred = np.argmax(predictions[i])
+            if pred==test_lab[i]:
+                right.append([test_pre_raw[i], test_hyp_raw[i], str(pred), str(test_lab[i])])
+            else:
+                wrong.append([test_pre_raw[i], test_hyp_raw[i], str(pred), str(test_lab[i])])
+        path = "stats/mnli/"
+        with open(path+"right_samples_raw.csv","w") as f:
+            f.write("premise\thypothesis\tprediction\tlabel\n")
+            f.write("\n".join(["\t".join(e) for e in right]))
+        with open(path+"wrong_samples_raw.csv","w") as f:
+            f.write("premise\thypothesis\tprediction\tlabel\n")
+            f.write("\n".join(["\t".join(e) for e in wrong]))
+
 
 t_pre, t_hyp, t_lab = load_mnli(lim=15000)
 pre_train, hyp_train, v, s = ngram_vectorize(t_pre, t_hyp, t_lab)
 
 model = siamese_mlp_model(units=[8], input_shape=pre_train.shape[1:], num_classes=3, optimizer=tf.keras.optimizers.Adam(lr=1e-3))
-train_model(model, [pre_train, hyp_train], t_lab)
+#train_model(model, [pre_train, hyp_train], t_lab)
 
 
